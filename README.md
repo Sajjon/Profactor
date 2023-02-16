@@ -1,3 +1,6 @@
 # Profactor
 
-A description of this package.
+Profile + Actor
+Pro + Factor
+
+Get it?
