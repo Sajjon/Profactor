@@ -207,8 +207,7 @@ public final actor ProfileStorage: Sendable, GlobalActor {
     @Dependency(\.profileSnapshotPersistence) var profileSnapshotPersistence
     @Dependency(\.iCloud) var iCloud
     
-//    private let appPreferencesChannel: AsyncBufferedChannel<AppPreferences> = .init()
-    private let appPreferencesSubject: AsyncReplaySubject<AppPreferences> = .init(bufferSize: 2)
+    private let appPreferencesSubject: AsyncReplaySubject<AppPreferences> = .init(bufferSize: 1)
     private let accountsForCurrentNetworkSubject: AsyncReplaySubject<Profile.Network.Accounts> = .init(bufferSize: 1)
     private let personasForCurrentNetworkSubject: AsyncReplaySubject<Profile.Network.Personas> = .init(bufferSize: 1)
     

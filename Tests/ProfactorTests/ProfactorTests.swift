@@ -22,10 +22,16 @@ final class ProfactorTests: XCTestCase {
             $0.userDefaults = ephemeral
             $0.uuid = .incrementing
         }, operation: {
+            
+            let storage = ProfileStorage.shared
 
+            let consumer0ReceivedFirstValue = expectation(description: "Consumer 0 received first value")
+            let consumer1ReceivedFirstValue = expectation(description: "Consumer 1 received first value")
+            
             Task {
                 var received = Set<Bool>()
-                for try await appPreferences in ProfileStorage.shared.appPreferences().prefix(2) {
+                for try await appPreferences in storage.appPreferences().prefix(2) {
+                    if received.isEmpty { consumer0ReceivedFirstValue.fulfill() }
                     print("🔮 consumer 0 received: \(appPreferences.useDarkMode)")
                     received.insert(appPreferences.useDarkMode)
                 }
@@ -35,7 +41,8 @@ final class ProfactorTests: XCTestCase {
             
             Task {
                 var received = Set<Bool>()
-                for try await appPreferences in ProfileStorage.shared.appPreferences().prefix(2) {
+                for try await appPreferences in storage.appPreferences().prefix(2) {
+                    if received.isEmpty { consumer1ReceivedFirstValue.fulfill() }
                     print("🔮 consumer 1 received: \(appPreferences.useDarkMode)")
                     received.insert(appPreferences.useDarkMode)
                 }
@@ -43,9 +50,10 @@ final class ProfactorTests: XCTestCase {
                 consumer1Completed.fulfill()
             }
        
-            var profileCopy = await ProfileStorage.shared.profile
+            wait(for: [consumer0ReceivedFirstValue, consumer1ReceivedFirstValue], timeout: 1)
+            var profileCopy = await storage.profile
             profileCopy.appPreferences.useDarkMode = true
-            await ProfileStorage.shared.updateProfile(profileCopy)
+            await storage.updateProfile(profileCopy)
         })
         
         await waitForExpectations(timeout: 1)
