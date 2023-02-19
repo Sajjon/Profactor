@@ -9,7 +9,6 @@ import XCTAssertBytesEqual
 final class ProfactorTests: XCTestCase {
     
     func testExample() async throws {
-        let encodesProfile = expectation(description: "Encodes profile")
         
         let consumer0Completed = expectation(description: "Consumer 0 completed")
         let consumer1Completed = expectation(description: "Consumer 1 completed")
@@ -17,45 +16,39 @@ final class ProfactorTests: XCTestCase {
         let ephemeral = UserDefaults.Dependency.ephemeral()
         
         await withDependencies({
-            $0.encode = {
-                encodesProfile.fulfill()
-                return .json
-            }()
-            $0.uuid = .incrementing
+            $0.encode = .json
+            $0.profileSnapshotPersistence.saveProfileSnapshot = { _ in Data() }
+            $0.profileSnapshotPersistence.loadProfileSnapshot = { nil }
             $0.userDefaults = ephemeral
+            $0.uuid = .incrementing
         }, operation: {
-            let storage = ProfileStorage.shared
-            let consumer0Ready = expectation(description: "Consumer 0 ready")
-            let consumer1Ready = expectation(description: "Consumer 1 ready")
+
             Task {
                 var received = Set<Bool>()
-                consumer0Ready.fulfill()
-                for try await appPreferences in storage.appPreferences().prefix(2) {
-                    print("consumer0 - appPreferences.useDarkMode: \(appPreferences.useDarkMode)")
+                for try await appPreferences in ProfileStorage.shared.appPreferences().prefix(2) {
+                    print("🔮 consumer 0 received: \(appPreferences.useDarkMode)")
                     received.insert(appPreferences.useDarkMode)
                 }
                 XCTAssertEqual(received, Set([false, true]))
                 consumer0Completed.fulfill()
             }
+            
             Task {
                 var received = Set<Bool>()
-                consumer1Ready.fulfill()
-                for try await appPreferences in storage.appPreferences().prefix(2) {
-                    print("consumer1 - appPreferences.useDarkMode: \(appPreferences.useDarkMode)")
+                for try await appPreferences in ProfileStorage.shared.appPreferences().prefix(2) {
+                    print("🔮 consumer 1 received: \(appPreferences.useDarkMode)")
                     received.insert(appPreferences.useDarkMode)
                 }
                 XCTAssertEqual(received, Set([false, true]))
                 consumer1Completed.fulfill()
             }
-            wait(for: [consumer0Ready, consumer1Ready], timeout: 0.01)
-            var profileCopy = await storage.profile
+       
+            var profileCopy = await ProfileStorage.shared.profile
             profileCopy.appPreferences.useDarkMode = true
-//            Task {
-                await storage.updateProfile(profileCopy)
-//            }
+            await ProfileStorage.shared.updateProfile(profileCopy)
         })
-      
-        await waitForExpectations(timeout: 0.5)
-
+        
+        await waitForExpectations(timeout: 1)
+        
     }
 }

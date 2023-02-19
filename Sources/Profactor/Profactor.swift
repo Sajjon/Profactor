@@ -2,12 +2,12 @@ public struct iCloudDependency: DependencyKey {
     public var upload: @Sendable (Data) async throws -> Void
 }
 extension iCloudDependency {
-    public static let noop: iCloudDependency = {
+    public static let noop: Self = {
         Self.init(upload: { _ in /* */})
     }()
-    public static let liveValue: iCloudDependency = Self.noop
-    public static let previewValue: iCloudDependency = Self.noop
-    public static let testValue: iCloudDependency = Self.noop
+    public static let liveValue: Self = Self.noop
+    public static let previewValue: Self = Self.noop
+    public static let testValue: Self = Self.noop
 }
 extension DependencyValues {
   /// A dependency that exposes an ``UserDefaults.Dependency`` value that you can use to read and
@@ -17,6 +17,100 @@ extension DependencyValues {
     set { self[iCloudDependency.self] = newValue }
   }
 }
+
+
+//
+//
+//public struct KeychainDependency: DependencyKey {
+//    public typealias Key = Tagged<Self, String>
+//    public var saveData: @Sendable (Data, Key) async throws -> Void
+//    public var loadData: @Sendable (Key) async throws -> Data?
+//}
+//extension KeychainDependency {
+//    public static let noop: Self = {
+//        Self.init(
+//            saveData: { _, _ in },
+//            loadData: { _ in nil }
+//        )
+//    }()
+//    public static let liveValue: Self = {
+//        Self.init(
+//            saveData: { _, _ in },
+//            loadData: { _ in nil }
+//        )
+//    }()
+//    public static let previewValue: Self = Self.noop
+//    public static let testValue: Self = {
+//        Self.init(
+//            saveData: unimplemented("\(Self.self).saveData"),
+//            loadData: unimplemented("\(Self.self).loadData")
+//        )
+//    }()
+//}
+//extension DependencyValues {
+//  public var keychain: KeychainDependency {
+//    get { self[KeychainDependency.self] }
+//    set { self[KeychainDependency.self] = newValue }
+//  }
+//}
+
+
+public struct ProfileSnapshotPersistenceDependency: DependencyKey {
+    public typealias Key = Tagged<Self, String>
+    public var saveProfileSnapshot: @Sendable (ProfileSnapshot) async throws -> Data
+    public var loadProfileSnapshot: @Sendable () async throws -> ProfileSnapshot?
+}
+//public func saveFactorSourceSecret(
+//    _ secret: FactorSource.Secret,
+//    forFactorSourceID id: FactorSource.ID
+//) async throws {
+//    try await self.saveData(secret.rawRepresentation, KeychainDependency.Key.init(rawValue: id.uuidString))
+//}
+internal let profileSnapshotKey = "profileSnapshotKey"
+extension ProfileSnapshotPersistenceDependency {
+    public static let noop: Self = {
+        Self.init(
+            saveProfileSnapshot: { _ in Data() },
+            loadProfileSnapshot: { nil }
+        )
+    }()
+    public static let liveValue: Self = {
+        @Dependency(\.userDefaults) var userDefaults
+        return Self.init(
+            saveProfileSnapshot: { profileSnapshot in
+                @Dependency(\.encode) var encode
+                let data = try encode(profileSnapshot)
+                try await userDefaults.set(data, forKey: profileSnapshotKey)
+                return data
+            },
+            loadProfileSnapshot:  {
+                @Dependency(\.decode) var decode
+                guard let data = try await userDefaults.data(forKey: profileSnapshotKey) else {
+                    return nil
+                }
+                return try decode(ProfileSnapshot.self, from: data)
+            })
+    }()
+
+
+    public static let previewValue: Self = Self.noop
+    public static let testValue: Self = {
+        Self.init(
+            saveProfileSnapshot: unimplemented("\(Self.self).saveProfileSnapshot"),
+            loadProfileSnapshot: unimplemented("\(Self.self).loadProfileSnapshot")
+        )
+    }()
+}
+extension DependencyValues {
+  public var profileSnapshotPersistence: ProfileSnapshotPersistenceDependency {
+    get { self[ProfileSnapshotPersistenceDependency.self] }
+    set { self[ProfileSnapshotPersistenceDependency.self] = newValue }
+  }
+}
+
+
+
+
 public struct AppPreferences: Sendable, Hashable, Codable {
     public var useDarkMode: Bool
     public init(useDarkMode: Bool = false) {
@@ -108,38 +202,13 @@ extension Profile.Network {
         public var id: ID { address }
     }
 }
-internal let profileSnapshotKey = "profileSnapshotKey"
-extension UserDefaults.Dependency {
-    public func loadProfileSnapshot() async throws -> ProfileSnapshot? {
-        @Dependency(\.decode) var decode
-        guard let data = self.data(forKey: profileSnapshotKey) else {
-            return nil
-        }
-        return try decode(ProfileSnapshot.self, from: data)
-    }
-
-    @discardableResult
-    public func saveProfileSnapshot(_ profileSnapshot: ProfileSnapshot) async throws -> Data {
-        @Dependency(\.encode) var encode
-        let data = try encode(profileSnapshot)
-        self.set(data, forKey: profileSnapshotKey)
-        return data
-    }
-    
-    public func saveFactorSourceSecret(
-        _ secret: FactorSource.Secret,
-        forFactorSourceID id: FactorSource.ID
-    ) async throws {
-        self.set(secret.rawRepresentation.description, forKey: id.uuidString)
-    }
-}
-
 
 public final actor ProfileStorage: Sendable, GlobalActor {
-    @Dependency(\.userDefaults) var keychainClient
+    @Dependency(\.profileSnapshotPersistence) var profileSnapshotPersistence
     @Dependency(\.iCloud) var iCloud
     
-    private let appPreferencesSubject: AsyncReplaySubject<AppPreferences> = .init(bufferSize: 1)
+//    private let appPreferencesChannel: AsyncBufferedChannel<AppPreferences> = .init()
+    private let appPreferencesSubject: AsyncReplaySubject<AppPreferences> = .init(bufferSize: 2)
     private let accountsForCurrentNetworkSubject: AsyncReplaySubject<Profile.Network.Accounts> = .init(bufferSize: 1)
     private let personasForCurrentNetworkSubject: AsyncReplaySubject<Profile.Network.Personas> = .init(bufferSize: 1)
     
@@ -150,18 +219,13 @@ public final actor ProfileStorage: Sendable, GlobalActor {
             emitNetworkDependentUpdates()
         }
     }
-    
     public private(set) var profile: Profile {
         didSet {
-            print("DID SET PROFILE")
             Task {
                 try? await syncStorage()
             }
             emitUpdates()
         }
-    }
-    public func updateProfile(_ newProfile: Profile) async {
-        self.profile = newProfile
     }
   
     private init() {
@@ -169,13 +233,26 @@ public final actor ProfileStorage: Sendable, GlobalActor {
         let secret = FactorSource.Secret()
         let newFactorSource = FactorSource(secret: secret)
         self.profile = Profile(factorSource: newFactorSource)
-        Task {
-            await load(
-                newFactorSourceIfNeeded: newFactorSource,
-                andItsSecret: secret
-            )
+        
+        let semaphore = DispatchSemaphore(value: 0)
+        
+        // Must do this in a separate thread, otherwise we block the concurrent thread pool
+        DispatchQueue.global(qos: .userInitiated).async {
+            Task {
+                await self.load(
+                    newFactorSourceIfNeeded: newFactorSource,
+                    andItsSecret: secret
+                )
+                semaphore.signal()
+            }
         }
+        semaphore.wait()
     }
+    
+    public func updateProfile(_ newProfile: Profile) async {
+        self.profile = newProfile
+    }
+  
     
     private func load(
         newFactorSourceIfNeeded newFactorSource: FactorSource,
@@ -183,12 +260,12 @@ public final actor ProfileStorage: Sendable, GlobalActor {
     ) async {
         do {
             let snapshot = try await {
-                if let loaded = try await keychainClient.loadProfileSnapshot() {
+                if let loaded = try await profileSnapshotPersistence.loadProfileSnapshot() {
                     return loaded
                 } else {
                     // First run, save the new profile and secret
-                    try await keychainClient.saveProfileSnapshot(profile.snapshot())
-                    try await keychainClient.saveFactorSourceSecret(secret, forFactorSourceID: newFactorSource.id)
+                    try await profileSnapshotPersistence.saveProfileSnapshot(profile.snapshot())
+//                    try await keychain.saveFactorSourceSecret(secret, forFactorSourceID: newFactorSource.id)
                     return profile.snapshot()
                 }
             }()
@@ -196,24 +273,25 @@ public final actor ProfileStorage: Sendable, GlobalActor {
             // it is actually good and needed since it will trigger `didSet`, which triggers emit!
             self.profile = Profile(snapshot: snapshot)
         } catch {
-           fatalError("Failed to load profile from keychain")
+           fatalError("Failed to load profile from keychain, error: \(String(describing: error))")
         }
     }
     
     // MARK: SyncStorage
     private func syncStorage() async throws {
         let snapshot = profile.snapshot()
-        let json = try await keychainClient.saveProfileSnapshot(snapshot)
+        let json = try await profileSnapshotPersistence.saveProfileSnapshot(snapshot)
         try await iCloud.upload(json)
     }
     
     // MARK: Emit
     private func emitUpdates() {
-        print("EMIT!")
         emitNetworkDependentUpdates()
         emitNetworkIndependentUpdates()
     }
     private func emitNetworkIndependentUpdates() {
+        print("🎉 emit - useDarkMode: \(profile.appPreferences.useDarkMode)")
+//        appPreferencesChannel.send(profile.appPreferences)
         appPreferencesSubject.send(profile.appPreferences)
     }
     private func emitNetworkDependentUpdates() {
@@ -225,23 +303,27 @@ public final actor ProfileStorage: Sendable, GlobalActor {
     }
     
     // MARK: AsyncSequence
+    
     nonisolated public func appPreferences() -> AnyAsyncSequence<AppPreferences> {
+//        appPreferencesChannel
         appPreferencesSubject
-            .removeDuplicates { $0 == $1 }
+            .removeDuplicates()
+//            .buffer(policy: .unbounded)
             .share() // Multicast
             .eraseToAnyAsyncSequence()
+            
     }
     
     nonisolated public func accountsCurrentNetwork() -> AnyAsyncSequence<Profile.Network.Accounts> {
         accountsForCurrentNetworkSubject
-            .removeDuplicates { $0 == $1 }
+            .removeDuplicates()
             .share() // Multicast
             .eraseToAnyAsyncSequence()
     }
     
     nonisolated public func personasCurrentNetwork() -> AnyAsyncSequence<Profile.Network.Personas> {
         personasForCurrentNetworkSubject
-            .removeDuplicates { $0 == $1 }
+            .removeDuplicates()
             .share() // Multicast
             .eraseToAnyAsyncSequence()
     }
